@@ -1,0 +1,63 @@
+"""
+YAHBOOM Micro:bit人脸识别系统配置
+"""
+
+# YAHBOOM摄像头配置
+YAHBOOM_CAMERA_CONFIG = {
+    'camera_index': 0,              # 摄像头索引
+    'resolution': (640, 480),       # 分辨率
+    'framerate': 30,                # 帧率
+    'rotation': 0,                  # 旋转角度
+    'autofocus': True,              # 自动对焦
+    'brightness': 0.5               # 亮度
+}
+
+# Micro:bit显示配置
+MICROBIT_CONFIG = {
+    'display_duration': 3000,       # 显示持续时间(ms)
+    'scroll_speed': 150,            # 滚动速度
+    'brightness_levels': 9,         # 亮度等级
+    'number_display_time': 2000     # 数字显示时间
+}
+
+# 人脸识别配置
+FACE_RECOGNITION_CONFIG = {
+    'tolerance': 0.6,               # 匹配容忍度
+    'model': 'hog',                 # 检测模型: hog 或 cnn
+    'upsample': 1,                  # 图像放大倍数
+    'sample_count': 5,              # 录入样本数
+    'min_face_size': 100            # 最小人脸尺寸
+}
+
+# 安全哈希配置
+SECURITY_CONFIG = {
+    'hash_algorithm': 'sha256',      # 哈希算法
+    'key_file': 'encryption.key',   # 密钥文件
+    'hash_length': 64,              # 哈希值长度
+    'enable_encryption': True       # 启用加密
+}
+
+# Boot按钮配置
+BOOT_CONFIG = {
+    'pin': 0,                       # 按钮引脚
+    'debounce_time': 200,           # 防抖时间(ms)
+    'long_press_time': 2000,        # 长按时间(ms)
+    'press_timeout': 10000          # 按压超时(ms)
+}
+
+# 文件路径配置
+PATH_CONFIG = {
+    'faces_dir': 'faces_data',
+    'models_dir': 'models',
+    'encodings_file': 'models/face_encodings.pkl',
+    'labels_file': 'models/face_labels.pkl',
+    'hash_db_file': 'models/hash_database.json'
+}
+
+# 系统参数
+SYSTEM_CONFIG = {
+    'max_persons': 10,              # 最大支持人数
+    'recognition_timeout': 30,      # 识别超时(秒)
+    'log_level': 'INFO',           # 日志级别
+    'demo_mode': False              # 演示模式
+}
