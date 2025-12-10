@@ -1,0 +1,307 @@
+"""
+Micro:bit LED点阵显示控制器
+实现数字显示、状态指示和动画效果
+"""
+
+import time
+import math
+from microbit import *
+
+class MicrobitDisplayController:
+    def __init__(self):
+        """初始化Micro:bit显示控制器"""
+        self.current_display = None
+        self.is_connected = self._test_connection()
+        self.number_patterns = self._create_number_patterns()
+        self.animation_frames = self._create_animation_frames()
+        self.status_icons = self._create_status_icons()
+        
+        if self.is_connected:
+            print("✓ Micro:bit显示控制器初始化成功")
+        else:
+            print("⚠ Micro:bit未连接，使用模拟模式")
+    
+    def _test_connection(self):
+        """测试Micro:bit连接状态"""
+        try:
+            # 测试基本显示功能
+            display.show(Image.YES)
+            time.sleep(0.3)
+            display.clear()
+            return True
+        except Exception:
+            return False
+    
+    def _create_number_patterns(self):
+        """创建数字0-9的LED显示模式"""
+        return {
+            0: Image("09990:09090:09090:09090:09990"),
+            1: Image("00900:00900:00900:00900:00900"),
+            2: Image("09990:00090:09990:09000:09990"),
+            3: Image("09990:00090:09990:00090:09990"),
+            4: Image("09090:09090:09990:00090:00090"),
+            5: Image("09990:09000:09990:00090:09990"),
+            6: Image("09990:09000:09990:09090:09990"),
+            7: Image("09990:00090:00090:00090:00090"),
+            8: Image("09990:09090:09990:09090:09990"),
+            9: Image("09990:09090:09990:00090:09990")
+        }
+    
+    def _create_animation_frames(self):
+        """创建动画帧序列"""
+        return {
+            'processing': [
+                Image("00000:00000:00900:00000:00000"),
+                Image("00000:00900:09090:00900:00000"),
+                Image("00900:09090:90009:09090:00900"),
+                Image("00000:00900:09090:00900:00000")
+            ],
+            'hashing': [
+                Image("90009:09090:00900:09090:90009"),
+                Image("09090:90009:00900:90009:09090"),
+                Image("00900:09090:90009:09090:00900")
+            ],
+            'success': [
+                Image("00000:00000:00000:00009:00090"),
+                Image("00000:00000:00009:00090:00900"),
+                Image("00000:00009:00090:00900:09000"),
+                Image("00009:00090:00900:09000:90000"),
+                Image("00090:00900:09000:90000:00000"),
+                Image("00900:09000:90000:00000:00000")
+            ],
+            'scanning': [
+                Image("90000:00000:00000:00000:00000"),
+                Image("09000:00000:00000:00000:00000"),
+                Image("00900:00000:00000:00000:00000"),
+                Image("00090:00000:00000:00000:00000"),
+                Image("00009:00000:00000:00000:00000"),
+                Image("00000:00009:00000:00000:00000"),
+                Image("00000:00090:00000:00000:00000"),
+                Image("00000:00900:00000:00000:00000"),
+                Image("00000:09000:00000:00000:00000"),
+                Image("00000:90000:00000:00000:00000")
+            ]
+        }
+    
+    def _create_status_icons(self):
+        """创建状态图标"""
+        return {
+            'ready': Image("00900:00900:00900:00900:00900"),  # 就绪
+            'capturing': Image("09990:90009:90009:90009:09990"),  # 摄像头
+            'recognizing': Image("00900:09990:00900:00900:00900"),  # 识别中
+            'hashing': Image("90009:09090:00900:09090:90009"),  # 哈希计算
+            'secure': Image("09990:90009:90009:90009:09990"),  # 安全锁
+            'error': Image.NO,  # 错误
+            'success': Image.YES  # 成功
+        }
+    
+    def display_person_number(self, person_label, confidence=0.0, duration=3000):
+        """
+        显示人员编号
+        
+        Args:
+            person_label: 人员标签 (如 "person0")
+            confidence: 识别置信度
+            duration: 显示时间(ms)
+            
+        Returns:
+            bool: 显示是否成功
+        """
+        try:
+            if person_label.startswith('person'):
+                person_num = int(person_label[6:])
+                success = self.display_number(person_num, duration)
+                
+                # 串口输出详细信息
+                print(f"[Micro:bit] 显示: {person_label} -> 数字 {person_num}")
+                print(f"[Micro:bit] 置信度: {confidence:.2f}")
+                
+                return success
+            else:
+                self.display_unknown()
+                return False
+                
+        except (ValueError, IndexError):
+            self.display_error()
+            return False
+    
+    def display_number(self, number, duration=2000):
+        """
+        显示单个数字
+        
+        Args:
+            number: 要显示的数字 (0-9)
+            duration: 显示时间(ms)
+            
+        Returns:
+            bool: 显示是否成功
+        """
+        if not self.is_connected:
+            print(f"[模拟显示] 数字: {number}")
+            return True
+        
+        if number in self.number_patterns:
+            display.show(self.number_patterns[number])
+            self.current_display = number
+            
+            if duration > 0:
+                self._sleep_with_interrupt(duration)
+                
+            return True
+        else:
+            self.display_error()
+            return False
+    
+    def display_hash_visualization(self, hash_string, total_duration=5000):
+        """
+        可视化显示哈希值
+        
+        Args:
+            hash_string: 64字符哈希字符串
+            total_duration: 总显示时间(ms)
+        """
+        if not self.is_connected:
+            print(f"[哈希显示] {hash_string}")
+            return
+        
+        # 显示哈希计算动画
+        self._play_animation('hashing', 1000)
+        
+        if len(hash_string) < 8:
+            return
+        
+        # 将哈希字符转换为亮度值 (0-9)
+        hex_to_brightness = {
+            '0': 0, '1': 1, '2': 2, '3': 3, '4': 4,
+            '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
+            'a': 5, 'b': 6, 'c': 7, 'd': 8, 'e': 9, 'f': 9
+        }
+        
+        # 显示前8个字符（代表性显示）
+        short_hash = hash_string[:8].lower()
+        brightness_seq = [hex_to_brightness.get(c, 0) for c in short_hash]
+        
+        # 分块显示
+        chunk_duration = total_duration // 2
+        self._display_hash_chunk(brightness_seq[:4], chunk_duration)
+        self._display_hash_chunk(brightness_seq[4:], chunk_duration)
+    
+    def _display_hash_chunk(self, chunk, duration):
+        """显示哈希值的一个数据块"""
+        if len(chunk) != 4 or not self.is_connected:
+            return
+        
+        # 创建5x5显示模式
+        pattern = (f"{chunk[0]}{chunk[0]}{chunk[1]}{chunk[1]}0:"
+                   f"{chunk[0]}{chunk[0]}{chunk[1]}{chunk[1]}0:"
+                   f"{chunk[2]}{chunk[2]}{chunk[2]}{chunk[2]}0:"
+                   f"{chunk[3]}{chunk[3]}{chunk[3]}{chunk[3]}0:"
+                   f"00000")
+        
+        try:
+            display.show(Image(pattern))
+            self._sleep_with_interrupt(duration)
+        except:
+            print(f"[哈希显示] 块: {chunk}")
+    
+    def display_capture_progress(self, current, total, person_id):
+        """
+        显示采集进度
+        
+        Args:
+            current: 当前样本数
+            total: 总样本数
+            person_id: 人员ID
+        """
+        if not self.is_connected:
+            print(f"[进度] person{person_id}: {current}/{total}")
+            return
+        
+        # 显示进度条
+        progress = int((current / total) * 5)  # 5个LED宽度
+        pattern = "9" * progress + "0" * (5 - progress)
+        progress_image = Image(f"{pattern}:{pattern}:{pattern}:{pattern}:{pattern}")
+        
+        display.show(progress_image)
+        self._sleep_with_interrupt(800)
+        
+        # 显示当前人员编号
+        self.display_number(person_id, 800)
+    
+    def display_security_status(self, status, duration=2000):
+        """
+        显示安全状态
+        
+        Args:
+            status: 状态类型
+            duration: 显示时间(ms)
+        """
+        if status in self.status_icons and self.is_connected:
+            display.show(self.status_icons[status])
+            self._sleep_with_interrupt(duration)
+        else:
+            print(f"[安全状态] {status}")
+    
+    def display_animation(self, animation_name, duration=1000):
+        """
+        播放指定动画
+        
+        Args:
+            animation_name: 动画名称
+            duration: 动画时长(ms)
+        """
+        self._play_animation(animation_name, duration)
+    
+    def _play_animation(self, animation_name, duration):
+        """播放动画序列"""
+        if animation_name in self.animation_frames and self.is_connected:
+            frames = self.animation_frames[animation_name]
+            if not frames:
+                return
+                
+            frame_duration = max(50, duration // len(frames))  # 最小50ms
+            
+            for frame in frames:
+                display.show(frame)
+                self._sleep_with_interrupt(frame_duration)
+    
+    def _sleep_with_interrupt(self, duration_ms):
+        """可中断的睡眠函数"""
+        interval = 100  # 检查间隔
+        for _ in range(duration_ms // interval):
+            if button_a.is_pressed() or button_b.is_pressed():
+                break
+            sleep(interval)
+    
+    def display_countdown(self, seconds):
+        """
+        显示倒计时
+        
+        Args:
+            seconds: 倒计时秒数
+        """
+        for i in range(seconds, 0, -1):
+            self.display_number(i, 1000)
+        self.clear_display()
+    
+    def display_unknown(self):
+        """显示未知状态"""
+        if self.is_connected:
+            display.show(Image.QUESTION)
+            self._sleep_with_interrupt(2000)
+            self.clear_display()
+        print("[显示] 未知状态")
+    
+    def display_error(self):
+        """显示错误状态"""
+        if self.is_connected:
+            display.show(Image.NO)
+            self._sleep_with_interrupt(1000)
+            self.clear_display()
+        print("[显示] 错误状态")
+    
+    def clear_display(self):
+        """清空显示"""
+        if self.is_connected:
+            display.clear()
+        self.current
