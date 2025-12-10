@@ -1,0 +1,368 @@
+"""
+YAHBOOM专用摄像头控制器
+提供高质量的人脸图像捕获和预处理功能
+"""
+
+import cv2
+import numpy as np
+import time
+from datetime import datetime
+import logging
+
+class YahboomCameraController:
+    def __init__(self, camera_index=0, resolution=(640, 480)):
+        """
+        初始化YAHBOOM摄像头控制器
+        
+        Args:
+            camera_index: 摄像头设备索引
+            resolution: 图像分辨率 (width, height)
+        """
+        self.camera_index = camera_index
+        self.resolution = resolution
+        self.camera = None
+        self.is_ready = False
+        self.logger = self._setup_logging()
+        
+        self._initialize_camera()
+    
+    def _setup_logging(self):
+        """设置日志系统"""
+        logging.basicConfig(level=logging.INFO)
+        return logging.getLogger(__name__)
+    
+    def _initialize_camera(self):
+        """初始化摄像头硬件"""
+        try:
+            self.logger.info("正在初始化YAHBOOM摄像头...")
+            self.camera = cv2.VideoCapture(self.camera_index)
+            
+            if not self.camera.isOpened():
+                raise RuntimeError(f"无法打开摄像头索引 {self.camera_index}")
+            
+            # 设置摄像头参数
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+            self.camera.set(cv2.CAP_PROP_FPS, 30)
+            self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+            self.camera.set(cv2.CAP_PROP_BRIGHTNESS, 0.5)
+            self.camera.set(cv2.CAP_PROP_CONTRAST, 0.5)
+            self.camera.set(cv2.CAP_PROP_SATURATION, 0.5)
+            
+            # 验证摄像头
+            ret, test_frame = self.camera.read()
+            if not ret:
+                raise RuntimeError("摄像头测试捕获失败")
+                
+            self.is_ready = True
+            self.logger.info(f"✓ YAHBOOM摄像头初始化成功 - 分辨率: {self.resolution}")
+            
+        except Exception as e:
+            self.logger.error(f"✗ 摄像头初始化失败: {e}")
+            self.is_ready = False
+    
+    def capture_frame(self, enhance_quality=True):
+        """
+        捕获一帧图像
+        
+        Args:
+            enhance_quality: 是否进行图像质量增强
+            
+        Returns:
+            tuple: (success, frame)
+        """
+        if not self.is_ready:
+            self.logger.error("摄像头未就绪")
+            return False, None
+        
+        try:
+            ret, frame = self.camera.read()
+            if ret and frame is not None:
+                if enhance_quality:
+                    frame = self._enhance_image_quality(frame)
+                return True, frame
+            return False, None
+        except Exception as e:
+            self.logger.error(f"捕获帧失败: {e}")
+            return False, None
+    
+    def _enhance_image_quality(self, frame):
+        """
+        增强图像质量以适应人脸识别
+        
+        Args:
+            frame: 原始BGR图像
+            
+        Returns:
+            增强后的图像
+        """
+        try:
+            # 对比度增强
+            lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            cl = clahe.apply(l)
+            enhanced_lab = cv2.merge((cl, a, b))
+            enhanced = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+            
+            # 轻微降噪
+            enhanced = cv2.medianBlur(enhanced, 3)
+            
+            return enhanced
+        except Exception as e:
+            self.logger.warning(f"图像增强失败: {e}")
+            return frame
+    
+    def detect_faces(self, frame, min_size=(100, 100)):
+        """
+        检测图像中的人脸
+        
+        Args:
+            frame: 输入图像
+            min_size: 最小人脸尺寸
+            
+        Returns:
+            list: 人脸位置列表 [(x, y, w, h)]
+        """
+        try:
+            # 使用Haar级联分类器
+            face_cascade = cv2.CascadeClassifier(
+                cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            )
+            
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=min_size,
+                flags=cv2.CASCADE_SCALE_IMAGE
+            )
+            
+            return faces.tolist()
+        except Exception as e:
+            self.logger.error(f"人脸检测失败: {e}")
+            return []
+    
+    def extract_face_region(self, frame, face_location):
+        """
+        提取人脸区域图像
+        
+        Args:
+            frame: 原始图像
+            face_location: 人脸位置 (x, y, w, h)
+            
+        Returns:
+            face_image: 裁剪后的人脸图像
+        """
+        x, y, w, h = face_location
+        face_image = frame[y:y+h, x:x+w]
+        return face_image
+    
+    def capture_face_samples(self, person_id, samples_required=5, timeout=30):
+        """
+        捕获指定数量的人脸样本
+        
+        Args:
+            person_id: 人员ID
+            samples_required: 需要采集的样本数
+            timeout: 超时时间(秒)
+            
+        Returns:
+            tuple: (success, samples_collected, sample_images)
+        """
+        if not self.is_ready:
+            return False, 0, []
+        
+        self.logger.info(f"开始采集 person{person_id} 的人脸样本...")
+        
+        samples_collected = 0
+        sample_images = []
+        start_time = time.time()
+        
+        while samples_collected < samples_required and time.time() - start_time < timeout:
+            ret, frame = self.capture_frame()
+            if not ret:
+                continue
+            
+            faces = self.detect_faces(frame)
+            
+            if len(faces) == 1:
+                face_location = faces[0]
+                face_image = self.extract_face_region(frame, face_location)
+                
+                # 检查人脸质量
+                if self._check_face_quality(face_image):
+                    sample_images.append(face_image)
+                    samples_collected += 1
+                    
+                    # 保存样本
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"person{person_id}_sample{samples_collected}_{timestamp}.jpg"
+                    cv2.imwrite(f"faces_data/{filename}", face_image)
+                    
+                    self.logger.info(f"✓ 采集样本 {samples_collected}/{samples_required}")
+                    
+                    # 显示采集状态
+                    if hasattr(self, 'display_controller'):
+                        self.display_controller.display_capture_progress(
+                            samples_collected, samples_required, person_id
+                        )
+                
+                time.sleep(1)  # 采集间隔
+            else:
+                if len(faces) == 0:
+                    self.logger.warning("未检测到人脸，请正对摄像头")
+                else:
+                    self.logger.warning("检测到多个人脸，请确保单人环境")
+                
+                time.sleep(0.5)
+        
+        success = samples_collected >= samples_required
+        if success:
+            self.logger.info(f"✓ person{person_id} 样本采集完成")
+        else:
+            self.logger.warning(f"样本采集超时，仅采集 {samples_collected}/{samples_required}")
+        
+        return success, samples_collected, sample_images
+    
+    def _check_face_quality(self, face_image):
+        """
+        检查人脸图像质量
+        
+        Args:
+            face_image: 人脸图像
+            
+        Returns:
+            bool: 质量是否合格
+        """
+        if face_image is None or face_image.size == 0:
+            return False
+        
+        height, width = face_image.shape[:2]
+        if height < 100 or width < 100:
+            return False
+        
+        # 检查亮度
+        gray_face = cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY)
+        mean_brightness = np.mean(gray_face)
+        
+        if mean_brightness < 30 or mean_brightness > 220:
+            return False
+        
+        # 检查对比度
+        contrast = np.std(gray_face)
+        if contrast < 30:
+            return False
+        
+        return True
+    
+    def draw_detection_results(self, frame, faces, recognition_results=None):
+        """
+        在图像上绘制检测结果
+        
+        Args:
+            frame: 原始图像
+            faces: 检测到的人脸位置
+            recognition_results: 识别结果
+            
+        Returns:
+            绘制后的图像
+        """
+        result_frame = frame.copy()
+        
+        for i, (x, y, w, h) in enumerate(faces):
+            # 绘制人脸框
+            color = (0, 255, 0)  # 绿色
+            cv2.rectangle(result_frame, (x, y), (x+w, y+h), color, 2)
+            
+            # 绘制识别结果
+            if recognition_results and i < len(recognition_results):
+                result = recognition_results[i]
+                label = result.get('label', 'Unknown')
+                confidence = result.get('confidence', 0)
+                
+                label_text = f"{label} ({confidence:.2f})"
+                cv2.putText(result_frame, label_text, (x, y-10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                
+                # 显示对应的Micro:bit数字
+                if label.startswith('person'):
+                    try:
+                        person_num = int(label[6:])
+                        microbit_text = f"Micro:bit: {person_num}"
+                        cv2.putText(result_frame, microbit_text, (x, y+h+25),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                    except ValueError:
+                        pass
+        
+        return result_frame
+    
+    def start_preview(self, duration=10, window_name="YAHBOOM Camera Preview"):
+        """
+        启动摄像头预览
+        
+        Args:
+            duration: 预览时长(秒)
+            window_name: 窗口名称
+        """
+        if not self.is_ready:
+            self.logger.error("摄像头未就绪，无法启动预览")
+            return
+        
+        self.logger.info(f"启动摄像头预览 ({duration}秒)...")
+        start_time = time.time()
+        
+        while time.time() - start_time < duration:
+            ret, frame = self.capture_frame()
+            if ret:
+                # 显示帧率信息
+                fps = self.camera.get(cv2.CAP_PROP_FPS)
+                cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                cv2.imshow(window_name, frame)
+                
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+        
+        cv2.destroyAllWindows()
+        self.logger.info("摄像头预览结束")
+    
+    def release(self):
+        """释放摄像头资源"""
+        if self.camera:
+            self.camera.release()
+        cv2.destroyAllWindows()
+        self.is_ready = False
+        self.logger.info("摄像头资源已释放")
+
+# 测试函数
+def test_camera_controller():
+    """测试摄像头控制器功能"""
+    import os
+    os.makedirs('faces_data', exist_ok=True)
+    
+    camera = YahboomCameraController()
+    
+    if camera.is_ready:
+        print("1. 测试摄像头预览...")
+        camera.start_preview(duration=5)
+        
+        print("2. 测试人脸检测...")
+        ret, frame = camera.capture_frame()
+        if ret:
+            faces = camera.detect_faces(frame)
+            print(f"检测到 {len(faces)} 个人脸")
+            
+            if faces:
+                result_frame = camera.draw_detection_results(frame, faces)
+                cv2.imwrite('test_detection.jpg', result_frame)
+                print("✓ 人脸检测测试完成")
+        
+        camera.release()
+    else:
+        print("摄像头初始化失败")
+
+if __name__ == "__main__":
+    test_camera_controller()
