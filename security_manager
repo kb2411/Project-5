@@ -1,0 +1,456 @@
+"""
+哈希加密安全管理器
+负责生物特征数据的哈希计算、加密存储和安全验证
+"""
+
+import hashlib
+import json
+import os
+import time
+from datetime import datetime
+from cryptography.fernet import Fernet
+import numpy as np
+
+class SecurityManager:
+    def __init__(self, hash_algorithm='sha256', enable_encryption=True):
+        """
+        初始化安全管理器
+        
+        Args:
+            hash_algorithm: 哈希算法
+            enable_encryption: 是否启用加密
+        """
+        self.hash_algorithm = hash_algorithm
+        self.enable_encryption = enable_encryption
+        self.hash_database = {}
+        self.encryption_key = None
+        
+        # 创建必要的目录
+        os.makedirs('secure_data', exist_ok=True)
+        os.makedirs('encryption_keys', exist_ok=True)
+        
+        self._initialize_encryption()
+        self._load_hash_database()
+    
+    def _initialize_encryption(self):
+        """初始化加密系统"""
+        key_file = 'encryption_keys/face_encryption.key'
+        
+        if self.enable_encryption:
+            if os.path.exists(key_file):
+                # 加载现有密钥
+                with open(key_file, 'rb') as f:
+                    self.encryption_key = f.read()
+            else:
+                # 生成新密钥
+                self.encryption_key = Fernet.generate_key()
+                with open(key_file, 'wb') as f:
+                    f.write(self.encryption_key)
+            
+            self.cipher_suite = Fernet(self.encryption_key)
+            print("✓ 加密系统初始化完成")
+        else:
+            print("⚠ 加密功能已禁用")
+    
+    def _load_hash_database(self):
+        """加载哈希数据库"""
+        db_file = 'secure_data/hash_database.enc'
+        
+        if os.path.exists(db_file):
+            try:
+                if self.enable_encryption:
+                    with open(db_file, 'rb') as f:
+                        encrypted_data = f.read()
+                    decrypted_data = self.cipher_suite.decrypt(encrypted_data)
+                    self.hash_database = json.loads(decrypted_data.decode())
+                else:
+                    with open(db_file, 'r') as f:
+                        self.hash_database = json.load(f)
+                
+                print(f"✓ 加载哈希数据库，包含 {len(self.hash_database)} 条记录")
+            except Exception as e:
+                print(f"✗ 加载哈希数据库失败: {e}")
+                self.hash_database = {}
+        else:
+            self.hash_database = {}
+            print("✓ 创建新的哈希数据库")
+    
+    def _save_hash_database(self):
+        """保存哈希数据库"""
+        db_file = 'secure_data/hash_database.enc'
+        
+        try:
+            json_data = json.dumps(self.hash_database, indent=2)
+            
+            if self.enable_encryption:
+                encrypted_data = self.cipher_suite.encrypt(json_data.encode())
+                with open(db_file, 'wb') as f:
+                    f.write(encrypted_data)
+            else:
+                with open(db_file, 'w') as f:
+                    f.write(json_data)
+            
+            return True
+        except Exception as e:
+            print(f"✗ 保存哈希数据库失败: {e}")
+            return False
+    
+    def calculate_face_hash(self, face_image, person_id):
+        """
+        计算人脸图像的哈希值
+        
+        Args:
+            face_image: 人脸图像数据
+            person_id: 人员ID
+            
+        Returns:
+            str: 64字符哈希值
+        """
+        try:
+            # 将图像数据转换为字节
+            if isinstance(face_image, np.ndarray):
+                # 压缩图像数据以减少哈希计算量
+                from PIL import Image
+                pil_image = Image.fromarray(face_image)
+                
+                # 转换为灰度图并调整尺寸
+                gray_image = pil_image.convert('L')
+                resized_image = gray_image.resize((100, 100))
+                
+                # 转换为字节数据
+                image_bytes = resized_image.tobytes()
+            else:
+                image_bytes = face_image
+            
+            # 计算哈希值
+            if self.hash_algorithm == 'sha256':
+                hash_object = hashlib.sha256()
+            elif self.hash_algorithm == 'sha512':
+                hash_object = hashlib.sha512()
+            else:
+                hash_object = hashlib.md5()
+            
+            hash_object.update(image_bytes)
+            hash_value = hash_object.hexdigest()
+            
+            # 记录哈希值
+            self._record_hash(person_id, hash_value, image_bytes)
+            
+            return hash_value
+            
+        except Exception as e:
+            print(f"✗ 计算哈希值失败: {e}")
+            return None
+    
+    def _record_hash(self, person_id, hash_value, original_data):
+        """
+        记录哈希值到数据库
+        
+        Args:
+            person_id: 人员ID
+            hash_value: 哈希值
+            original_data: 原始数据（用于验证）
+        """
+        timestamp = datetime.now().isoformat()
+        
+        if person_id not in self.hash_database:
+            self.hash_database[person_id] = []
+        
+        # 创建哈希记录
+        hash_record = {
+            'hash': hash_value,
+            'timestamp': timestamp,
+            'algorithm': self.hash_algorithm,
+            'data_size': len(original_data) if original_data else 0,
+            'verification_count': 0
+        }
+        
+        # 添加加密的元数据（不包含原始图像）
+        metadata = {
+            'person_id': person_id,
+            'capture_time': timestamp,
+            'hash_algorithm': self.hash_algorithm
+        }
+        
+        if self.enable_encryption:
+            hash_record['encrypted_metadata'] = self.cipher_suite.encrypt(
+                json.dumps(metadata).encode()
+            ).decode()
+        
+        self.hash_database[person_id].append(hash_record)
+        
+        # 保持每个人员最多10个哈希记录
+        if len(self.hash_database[person_id]) > 10:
+            self.hash_database[person_id] = self.hash_database[person_id][-10:]
+        
+        # 保存数据库
+        self._save_hash_database()
+        
+        print(f"✓ 记录哈希值: {hash_value[:16]}... for person{person_id}")
+    
+    def verify_face_hash(self, face_image, person_id=None):
+        """
+        验证人脸哈希值
+        
+        Args:
+            face_image: 待验证的人脸图像
+            person_id: 指定人员ID（如为None则搜索所有记录）
+            
+        Returns:
+            dict: 验证结果
+        """
+        current_hash = self.calculate_face_hash(face_image, 'verification')
+        if not current_hash:
+            return {'verified': False, 'error': '哈希计算失败'}
+        
+        if person_id:
+            # 验证特定人员
+            if person_id in self.hash_database:
+                for record in self.hash_database[person_id]:
+                    if record['hash'] == current_hash:
+                        # 更新验证计数
+                        record['verification_count'] += 1
+                        self._save_hash_database()
+                        
+                        return {
+                            'verified': True,
+                            'person_id': person_id,
+                            'confidence': 1.0,
+                            'match_type': 'exact'
+                        }
+            
+            return {'verified': False, 'person_id': person_id}
+        else:
+            # 搜索所有人员
+            best_match = None
+            best_similarity = 0
+            
+            for pid, records in self.hash_database.items():
+                for record in records:
+                    similarity = self._calculate_hash_similarity(current_hash, record['hash'])
+                    if similarity > best_similarity:
+                        best_similarity = similarity
+                        best_match = {
+                            'person_id': pid,
+                            'similarity': similarity,
+                            'record': record
+                        }
+            
+            if best_match and best_similarity > 0.8:  # 相似度阈值
+                best_match['record']['verification_count'] += 1
+                self._save_hash_database()
+                
+                return {
+                    'verified': True,
+                    'person_id': best_match['person_id'],
+                    'confidence': best_similarity,
+                    'match_type': 'similar' if best_similarity < 1.0 else 'exact'
+                }
+            else:
+                return {'verified': False, 'best_similarity': best_similarity}
+    
+    def _calculate_hash_similarity(self, hash1, hash2):
+        """
+        计算两个哈希值的相似度
+        
+        Args:
+            hash1: 第一个哈希值
+            hash2: 第二个哈希值
+            
+        Returns:
+            float: 相似度 (0.0-1.0)
+        """
+        if len(hash1) != len(hash2):
+            return 0.0
+        
+        # 计算相同字符数量
+        match_count = sum(1 for a, b in zip(hash1, hash2) if a == b)
+        return match_count / len(hash1)
+    
+    def demonstrate_hash_security(self, original_image, modified_image):
+        """
+        演示哈希安全特性
+        
+        Args:
+            original_image: 原始图像
+            modified_image: 修改后的图像
+            
+        Returns:
+            dict: 演示结果
+        """
+        # 计算两个图像的哈希
+        hash_original = self.calculate_face_hash(original_image, 'demo_original')
+        hash_modified = self.calculate_face_hash(modified_image, 'demo_modified')
+        
+        if not hash_original or not hash_modified:
+            return {'success': False, 'error': '哈希计算失败'}
+        
+        # 比较哈希值
+        similarity = self._calculate_hash_similarity(hash_original, hash_modified)
+        
+        # 演示结果
+        demonstration = {
+            'success': True,
+            'hash_original': hash_original,
+            'hash_modified': hash_modified,
+            'similarity': similarity,
+            'hashes_equal': hash_original == hash_modified,
+            'avalanche_effect': self._demonstrate_avalanche_effect(original_image)
+        }
+        
+        return demonstration
+    
+    def _demonstrate_avalanche_effect(self, image_data):
+        """
+        演示雪崩效应（微小变化导致哈希值巨大变化）
+        
+        Args:
+            image_data: 原始图像数据
+            
+        Returns:
+            dict: 雪崩效应演示结果
+        """
+        if isinstance(image_data, np.ndarray):
+            # 创建微小修改的版本
+            modified_data = image_data.copy()
+            if len(modified_data.shape) == 3:
+                modified_data[0, 0, 0] = (modified_data[0, 0, 0] + 1) % 256  # 修改一个像素
+            
+            # 计算哈希
+            hash_original = hashlib.sha256(image_data.tobytes()).hexdigest()
+            hash_modified = hashlib.sha256(modified_data.tobytes()).hexdigest()
+            
+            # 计算差异
+            diff_count = sum(1 for a, b in zip(hash_original, hash_modified) if a != b)
+            
+            return {
+                'pixel_changed': '0,0,0',
+                'hash_original': hash_original[:16] + '...',
+                'hash_modified': hash_modified[:16] + '...',
+                'bits_changed': diff_count * 4,  # 每个十六进制字符代表4位
+                'avalanche_ratio': diff_count / len(hash_original)
+            }
+        
+        return {'error': '不支持的图像格式'}
+    
+    def get_security_report(self):
+        """
+        生成安全报告
+        
+        Returns:
+            dict: 安全报告
+        """
+        total_records = sum(len(records) for records in self.hash_database.values())
+        unique_persons = len(self.hash_database)
+        
+        # 统计验证次数
+        total_verifications = 0
+        for records in self.hash_database.values():
+            for record in records:
+                total_verifications += record.get('verification_count', 0)
+        
+        report = {
+            'encryption_enabled': self.enable_encryption,
+            'hash_algorithm': self.hash_algorithm,
+            'total_persons': unique_persons,
+            'total_hash_records': total_records,
+            'total_verifications': total_verifications,
+            'database_size': os.path.getsize('secure_data/hash_database.enc') if os.path.exists('secure_data/hash_database.enc') else 0,
+            'security_level': self._calculate_security_level()
+        }
+        
+        return report
+    
+    def _calculate_security_level(self):
+        """计算安全等级"""
+        base_score = 0
+        
+        # 加密加分
+        if self.enable_encryption:
+            base_score += 30
+        
+        # 哈希算法强度
+        if self.hash_algorithm == 'sha512':
+            base_score += 40
+        elif self.hash_algorithm == 'sha256':
+            base_score += 30
+        else:
+            base_score += 10
+        
+        # 数据量加分
+        total_records = sum(len(records) for records in self.hash_database.values())
+        base_score += min(total_records * 2, 30)  # 最多加30分
+        
+        return min(base_score, 100)  # 百分制
+    
+    def export_secure_data(self, export_file='secure_export.json'):
+        """
+        导出安全数据（不含原始生物特征）
+        
+        Args:
+            export_file: 导出文件名
+            
+        Returns:
+            bool: 导出是否成功
+        """
+        try:
+            export_data = {
+                'export_time': datetime.now().isoformat(),
+                'system_info': {
+                    'hash_algorithm': self.hash_algorithm,
+                    'encryption_enabled': self.enable_encryption,
+                    'total_persons': len(self.hash_database)
+                },
+                'hash_records': {}
+            }
+            
+            # 只导出哈希值，不包含任何原始数据
+            for person_id, records in self.hash_database.items():
+                export_data['hash_records'][person_id] = [
+                    {
+                        'hash': record['hash'],
+                        'timestamp': record['timestamp'],
+                        'verification_count': record['verification_count']
+                    }
+                    for record in records
+                ]
+            
+            with open(export_file, 'w') as f:
+                json.dump(export_data, f, indent=2)
+            
+            print(f"✓ 安全数据已导出到 {export_file}")
+            return True
+            
+        except Exception as e:
+            print(f"✗ 数据导出失败: {e}")
+            return False
+
+# 测试函数
+def test_security_manager():
+    """测试安全管理器功能"""
+    import numpy as np
+    
+    # 创建测试图像数据
+    test_image1 = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
+    test_image2 = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
+    
+    # 初始化安全管理器
+    security_mgr = SecurityManager()
+    
+    # 测试哈希计算
+    hash1 = security_mgr.calculate_face_hash(test_image1, 'test_person')
+    hash2 = security_mgr.calculate_face_hash(test_image2, 'test_person')
+    
+    print(f"测试哈希1: {hash1[:32]}...")
+    print(f"测试哈希2: {hash2[:32]}...")
+    
+    # 测试验证功能
+    result = security_mgr.verify_face_hash(test_image1, 'test_person')
+    print(f"验证结果: {result}")
+    
+    # 生成安全报告
+    report = security_mgr.get_security_report()
+    print("安全报告:", json.dumps(report, indent=2))
+
+if __name__ == "__main__":
+    test_security_manager()
